@@ -1,10 +1,11 @@
 import numpy as np
 from collections import defaultdict, deque
 import random
+import time
 
 
 class MWCCPSolver:
-    def __init__(self, filename, edge_format='adj_list'):
+    def __init__(self, filename, edge_format='adj_list', seed=None):
         """
         reading the instance file and initializing
         """
@@ -12,6 +13,10 @@ class MWCCPSolver:
         self.permutation = [i for i in range(self.num_u + 1, self.num_u + self.num_v + 1)]
         self.solution = None
         self.best_solution = None
+
+        if seed is not None:
+            random.seed(seed)
+            print(f"Random seed set to: {seed}")
 
     def read_instance(self, filename, edge_format='adj_list'):
 
@@ -40,7 +45,7 @@ class MWCCPSolver:
             edges = defaultdict(list)
             for line in lines[edges_start:]:
                 u, v, weight = line.strip().split()
-                edges[int(u)].append((int(v), float(weight)))
+                edges[int(v)].append((int(u), float(weight)))
                 edge_list.append((int(u), int(v), float(weight)))
         elif edge_format == 'matrix':
             edges = np.zeros((num_u, num_v))
@@ -53,7 +58,7 @@ class MWCCPSolver:
 
         return num_u, num_v, constraints, constraints_list, edges, edge_list
 
-    def calculate_objective(self, permutation):
+    def calculate_objective(self, permutation):     # SLOW!
         """
         total weighted crossings for a given permutation
         """
@@ -70,6 +75,57 @@ class MWCCPSolver:
 
         return total_crossings
 
+    def calculate_objective2(self, permutation):    # FASTER!
+
+        # Create a mapping of node positions based on the permutation
+        pos = {node: i for i, node in enumerate(permutation)}
+        total_crossings = 0
+
+        for v, us in self.edges.items():
+            for v_prime, us_prime in self.edges.items():
+                if pos[v] > pos[v_prime]:
+                    for u, w in us:
+                        for u_prime, w_prime in us_prime:
+                            if u < u_prime:
+                                total_crossings += w + w_prime
+
+        return total_crossings
+
+    def calculate_partial_objective(self, permutation):     # SLOW!
+        """
+        total weighted crossings for a given permutation
+        """
+        pos = {node: i for i, node in enumerate(permutation)}
+        total_crossings = 0
+        partial_edges = [edge for edge in self.edge_list if edge[1] in permutation]
+
+        for i in range(len(partial_edges)):
+            u, v, w = partial_edges[i]
+            for j in range(len(partial_edges)):
+                u_prime, v_prime, w_prime = partial_edges[j]
+                if u < u_prime:
+                    if pos[v] > pos[v_prime]:
+                        total_crossings += w + w_prime
+
+        return total_crossings
+
+    def calculate_partial_objective2(self, permutation):    # FASTER!
+
+        # Create a mapping of node positions based on the permutation
+        pos = {node: i for i, node in enumerate(permutation)}
+        partial_edges = {key: self.edges[key] for key in permutation}
+        total_crossings = 0
+
+        for v, us in partial_edges.items():
+            for v_prime, us_prime in partial_edges.items():
+                if pos[v] > pos[v_prime]:
+                    for u, w in us:
+                        for u_prime, w_prime in us_prime:
+                            if u < u_prime:
+                                total_crossings += w + w_prime
+
+        return total_crossings
+
     def is_feasible(self, permutation):
         """
         check if given permutation satisfies all constraints
@@ -78,6 +134,12 @@ class MWCCPSolver:
         for v, v_prime in self.constraints_list:
             if position[v] >= position[v_prime]:
                 return False
+
+        # # alternative:
+        # for v in self.constraints:
+        #     for v_prime in self.constraints[v]:
+        #         if position[v] >= position[v_prime]:
+        #             return False
         return True
 
     def swap_neighbors(self, solution):
@@ -187,15 +249,192 @@ class MWCCPSolver:
 
     def deterministic_construction_heuristic(self):
         """
-        needs something better
+        works like topological sort, but chooses node from list of nodes of in_degree=0,
+        which leads to the smallest increase in total weight
         """
-        return self.topological_sort()
+        # Initialize
+        solution = []  # Start with an empty solution
+        in_degree = {node: 0 for node in self.permutation}
+        graph = defaultdict(list)
+        # outgoing_weights = defaultdict(float)  # Store total outgoing weights for each node
+        outgoing_weights = dict.fromkeys(self.permutation, 0.0)
 
-    def randomized_construction_heuristic(self):
+        # Build the graph, in-degree, and outgoing weights based on constraints and edges
+        for v, v_prime in self.constraints_list:
+            graph[v].append(v_prime)
+            in_degree[v_prime] += 1
+
+        for u, v, w in self.edge_list:
+            outgoing_weights[v] += w
+
+        # Initialize the candidate list with nodes that have zero in-degree
+        candidate_list = [node for node in self.permutation if in_degree[node] == 0]
+        # Step 1: Select the first node based on total outgoing edge weight
+        first_node = min(candidate_list, key=lambda x: outgoing_weights[x])
+        solution.append(first_node)
+        candidate_list.remove(first_node)
+
+        # Update in-degree and candidate list after adding the first node
+        for neighbor in graph[first_node]:
+            in_degree[neighbor] -= 1
+            if in_degree[neighbor] == 0:
+                candidate_list.append(neighbor)
+
+        # Iteratively construct the rest of the solution
+        while candidate_list:
+            # Calculate weighted crossings for each candidate
+            weighted_crossings = []
+            for candidate in candidate_list:
+                weighted_crossings.append((candidate, self.calculate_partial_objective2(solution + [candidate])))
+
+            # Sort candidates by weighted crossings (ascending)
+            weighted_crossings.sort(key=lambda x: x[1])     # sort not nessecary, just take min
+
+            # Select the candidate with the least weighted crossings
+            best_candidate = weighted_crossings[0][0]
+
+            # Add the selected node to the solution
+            solution.append(best_candidate)
+            candidate_list.remove(best_candidate)
+
+            # Update in-degree and candidate list
+            for neighbor in graph[best_candidate]:
+                in_degree[neighbor] -= 1
+                if in_degree[neighbor] == 0:
+                    candidate_list.append(neighbor)
+
+        return solution
+
+    def random_construction_with_rcl(self, alpha=0.5):
         """
-        ---
+        Randomized construction heuristic with Restricted Candidate List (RCL).
+        Works like topological sort but selects the next node randomly from the RCL,
+        ensuring feasibility and balancing greediness and randomness.
+
+        Parameters:
+            alpha (float): Parameter controlling the greediness (0 = purely greedy, 1 = purely random).
+
+        Returns:
+            solution (list): Constructed solution.
         """
-        return self.topological_sort()
+        # Initialize
+        solution = []  # Start with an empty solution
+        in_degree = {node: 0 for node in self.permutation}
+        graph = defaultdict(list)
+        outgoing_weights = dict.fromkeys(self.permutation, 0.0)  # Store total outgoing weights for each node
+
+        # Build the graph, in-degree, and outgoing weights based on constraints and edges
+        for v, v_prime in self.constraints_list:
+            graph[v].append(v_prime)
+            in_degree[v_prime] += 1
+
+        for u, v, w in self.edge_list:
+            outgoing_weights[v] += w  # Correct: should be v
+
+        # Initialize the candidate list with nodes that have zero in-degree
+        candidate_list = [node for node in self.permutation if in_degree[node] == 0]
+
+        c_min = min(outgoing_weights[node] for node in candidate_list)
+        c_max = max(outgoing_weights[node] for node in candidate_list)
+
+        # Compute the RCL threshold
+        threshold = c_min + alpha * (c_max - c_min)
+
+        # Build the RCL with nodes satisfying the threshold condition
+        rcl = [node for node in candidate_list if outgoing_weights[node] <= threshold]
+
+        # Randomly select the first node from the RCL
+        first_node = random.choice(rcl)
+        solution.append(first_node)
+        candidate_list.remove(first_node)
+
+        # Update in-degree and candidate list after adding the first node
+        for neighbor in graph[first_node]:
+            in_degree[neighbor] -= 1
+            if in_degree[neighbor] == 0:
+                candidate_list.append(neighbor)
+
+        # Iteratively construct the solution
+        while candidate_list:
+            # Compute the weights (c(e)) for all candidates
+            candidate_weights = {candidate: self.calculate_partial_objective2(solution + [candidate])
+                                 for candidate in candidate_list}
+
+            # Determine c_min and c_max
+            c_min = min(candidate_weights.values())
+            c_max = max(candidate_weights.values())
+
+            # Compute the RCL threshold
+            threshold = c_min + alpha * (c_max - c_min)
+
+            # Build the Restricted Candidate List (RCL)
+            rcl = [candidate for candidate, weight in candidate_weights.items() if weight <= threshold]
+
+            # Randomly select a node from the RCL
+            selected_candidate = random.choice(rcl)
+
+            # Add the selected node to the solution
+            solution.append(selected_candidate)
+            candidate_list.remove(selected_candidate)
+
+            # Update in-degree and candidate list
+            for neighbor in graph[selected_candidate]:
+                in_degree[neighbor] -= 1
+                if in_degree[neighbor] == 0:
+                    candidate_list.append(neighbor)
+
+        return solution
+
+    def random_construction_heuristic(self):
+        """
+        Randomized construction heuristic.
+        Works like topological sort but randomly chooses the next node to add
+        from the list of nodes with in_degree = 0, ensuring feasibility.
+        """
+        # Initialize
+        solution = []  # Start with an empty solution
+        in_degree = {node: 0 for node in self.permutation}
+        graph = defaultdict(list)
+        outgoing_weights = defaultdict(float)  # Store total outgoing weights for each node
+
+        # Build the graph, in-degree, and outgoing weights based on constraints and edges
+        for v, v_prime in self.constraints_list:
+            graph[v].append(v_prime)
+            in_degree[v_prime] += 1
+
+        for u, v, w in self.edge_list:
+            outgoing_weights[v] += w  # Correct: should be v
+
+        # Initialize the candidate list with nodes that have zero in-degree
+        candidate_list = [node for node in self.permutation if in_degree[node] == 0]
+
+        # Select the first node randomly from the candidates
+        first_node = random.choice(candidate_list)
+        solution.append(first_node)
+        candidate_list.remove(first_node)
+
+        # Update in-degree and candidate list after adding the first node
+        for neighbor in graph[first_node]:
+            in_degree[neighbor] -= 1
+            if in_degree[neighbor] == 0:
+                candidate_list.append(neighbor)
+
+        # Iteratively construct the rest of the solution
+        while candidate_list:
+            # Randomly select a node from the candidate list
+            selected_candidate = random.choice(candidate_list)
+
+            # Add the selected node to the solution
+            solution.append(selected_candidate)
+            candidate_list.remove(selected_candidate)
+
+            # Update in-degree and candidate list
+            for neighbor in graph[selected_candidate]:
+                in_degree[neighbor] -= 1
+                if in_degree[neighbor] == 0:
+                    candidate_list.append(neighbor)
+
+        return solution
 
     def first_improvement(self, f_x, neighbors):
         """
@@ -226,17 +465,16 @@ class MWCCPSolver:
         """
         select a random neighbor.
         """
-        random.seed(0)
         if neighbors:
             rand_neighbor = random.choice(neighbors)
             return rand_neighbor, self.calculate_objective(rand_neighbor)
         return None, f_x  # Return None if there are no neighbors
 
-    def local_search(self, neighbors_func, step_function, max_iterations=100):
+    def local_search(self, init_solution, neighbors_func, step_function, max_iterations=100):
         """
         local search
         """
-        current_solution = self.solution
+        current_solution = init_solution
         for _ in range(max_iterations):
             f = self.calculate_objective(current_solution)
             neighbors = neighbors_func(current_solution)
@@ -249,28 +487,29 @@ class MWCCPSolver:
                 break
         return current_solution
 
-    def grasp(self, neighbors_func, step_function, max_iterations=100):
+    def grasp(self, neighbors_func, step_function, alpha=0.2, max_iterations=100):
 
         best_solution = None
         best_objective = float('inf')
 
         for iteration in range(max_iterations):
-            self.solution = self.randomized_construction_heuristic()
-            solution = self.local_search(neighbors_func, step_function, max_iterations=max_iterations)
-            objective_value = self.calculate_objective(solution)
+            x = self.random_construction_with_rcl(alpha=alpha)
+            x_prime = self.local_search(x, neighbors_func, step_function)
+            objective_value = self.calculate_objective(x_prime)
             if objective_value < best_objective:
-                best_solution = solution
+                best_solution = x_prime
                 best_objective = objective_value
 
         return best_solution
 
     def solve_local_search(self, step_function='best_improvement', neighbors_func='swap_neighbors', segment_length=None):
 
-        self.solution = self.topological_sort()
+        # init_solution = self.topological_sort()
+        init_solution = self.deterministic_construction_heuristic()
         print("step function:", step_function)
         print("neighborhood:", neighbors_func)
         print("segment length:", segment_length)
-        print("Initial solution:", self.solution)
+        print("Initial solution:", init_solution)
 
         neighbors_func_map = {
             'swap_neighbors': self.swap_neighbors,
@@ -289,15 +528,104 @@ class MWCCPSolver:
         neighbors_func = neighbors_func_map[neighbors_func]
         step_func = step_func_map[step_function]
 
-        self.best_solution = self.local_search(neighbors_func, step_func, max_iterations=100)
+        self.best_solution = self.local_search(init_solution, neighbors_func, step_func, max_iterations=100)
         print("Best solution:", self.best_solution)
 
-        f1 = self.calculate_objective(self.solution)
+        f1 = self.calculate_objective(init_solution)
         f_best = self.calculate_objective(self.best_solution)
 
         print("Initial objective value:", f1)
         print("Best objective value:", f_best)
 
+    def solve_grasp(self, step_function='best_improvement', neighbors_func='swap_neighbors',
+                    segment_length=None, alpha=0.2, max_iterations=100):
 
-solver = MWCCPSolver("test_instances/small/inst_50_4_00010")
-solver.solve_local_search(step_function='first_improvement', neighbors_func='reverse_segment_all_sizes', segment_length=2)
+        init_solution = self.deterministic_construction_heuristic()
+        print("step function:", step_function)
+        print("neighborhood:", neighbors_func)
+        print("segment length:", segment_length)
+        print("Initial solution:", init_solution)
+
+        neighbors_func_map = {
+            'swap_neighbors': self.swap_neighbors,
+            'insert_neighbors': self.insert_neighbors,
+            'reverse_segment_cyclic': lambda solution: self.reverse_segment_cyclic(solution, segment_length),
+            'reverse_segment_fixed': lambda solution: self.reverse_segment_fixed(solution, segment_length),
+            'reverse_segment_all_sizes': self.reverse_segment_all_sizes,
+        }
+
+        step_func_map = {
+            'best_improvement': self.best_improvement,
+            'first_improvement': self.first_improvement,
+            'random': self.random_step
+        }
+
+        neighbors_func = neighbors_func_map[neighbors_func]
+        step_func = step_func_map[step_function]
+
+        self.best_solution = self.grasp(neighbors_func, step_func, alpha=0.2, max_iterations=max_iterations)
+        print("Best solution:", self.best_solution)
+
+        f1 = self.calculate_objective(init_solution)
+        f_best = self.calculate_objective(self.best_solution)
+
+        print("Initial objective value:", f1)
+        print("Best objective value:", f_best)
+
+    def testing(self):
+        self.solution = self.topological_sort()
+        # print("deterministic:    ", self.deterministic_construction_heuristic())
+        print("completely random:", self.random_construction_heuristic())
+        # print("alpha=0.5:        ", self.random_construction_with_rcl(alpha=0.5))
+        # print("alpha=0:          ", self.random_construction_with_rcl(alpha=0.0))
+        # print("alpha=1:          ", self.random_construction_with_rcl(alpha=1.0))
+        # print(self.solution)
+        # dch = self.deterministic_construction_heuristic()
+        # print(dch)
+        # partial = []
+        # for node in self.solution:
+        #     partial.append(node)
+        #     print(self.calculate_partial_objective2(partial))
+        # print(self.calculate_partial_objective2(self.solution))
+        # print(self.calculate_partial_objective2(dch))
+
+        # for i in range(10):
+        #
+        #     start_time = time.time()
+        #     original = self.calculate_objective(self.solution)
+        #     end_time = time.time()
+        #     elapsed_time = (end_time - start_time)*1000
+        #     print(f"original Function executed in {elapsed_time:.6f} ms")
+        #     print("original:", original)
+        #
+        #     start_time = time.time()
+        #     first = self.calculate_partial_objective(self.solution)
+        #     end_time = time.time()
+        #     elapsed_time = (end_time - start_time) * 1000
+        #     print(f"first Function executed in {elapsed_time:.6f} ms")
+        #     print("first:", first)
+        #
+        #     start_time = time.time()
+        #     second = self.calculate_partial_objective2(self.solution)
+        #     end_time = time.time()
+        #     elapsed_time = (end_time - start_time) * 1000
+        #     print(f"second Function executed in {elapsed_time:.6f} ms")
+        #     print("second:", second)
+        #
+        #     start_time = time.time()
+        #     third = self.calculate_objective2(self.solution)
+        #     end_time = time.time()
+        #     elapsed_time = (end_time - start_time) * 1000
+        #     print(f"third Function executed in {elapsed_time:.6f} ms")
+        #     print("third:", third)
+
+
+
+
+
+solver = MWCCPSolver("test_instances/small/inst_50_4_00010", seed=0)
+# solver.testing()
+# solver.solve_local_search(step_function='first_improvement', neighbors_func='swap_neighbors', segment_length=2)
+solver.solve_grasp(step_function='first_improvement', neighbors_func='swap_neighbors',
+                   segment_length=2, alpha=0.2, max_iterations=30)
+
