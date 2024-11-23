@@ -1,6 +1,7 @@
 from collections import defaultdict, deque
 import random
 import time
+import math
 import cProfile
 import pstats
 
@@ -626,7 +627,7 @@ class MWCCPSolver:
         print("step function:", step_function)
         print("neighborhood:", neighbors_func)
         print("segment length:", segment_length)
-        print("Initial solution:", init_solution)
+        #print("Initial solution:", init_solution)
 
         neighbors_func_map = {
             'swap_neighbors': self.swap_neighbors_delta,
@@ -690,6 +691,180 @@ class MWCCPSolver:
         print("Best objective value:", f_best)
         return solutions
 
+    def solve_VND(self, neighborhood_functions = ["swap_neighbors", "reverse_segment", "insert_neighbors"], init_solution_func = "topological_sort", 
+                  step_function='best_improvement', segment_length = 5, max_neigborhood_swaps = 100, 
+                  max_iterations_per_neighborhood = 500, use_delta = False):
+        print("neighborhood functions:", neighborhood_functions)
+        print("init solution_function:", init_solution_func)
+        print("step function:", step_function)
+        print("max neigborhood swaps:", max_neigborhood_swaps)
+        print("max iterations per neighborhood:", max_iterations_per_neighborhood)
+        print("use delta:", use_delta)
+        print("segment length:", segment_length, "\n\n\n")
+
+        start_time = time.time()
+        neighbors_func_map = set()
+
+        if use_delta:
+            neighbors_func_map = {
+            'swap_neighbors': self.swap_neighbors_delta,
+            'insert_neighbors': self.insert_neighbors_delta,
+            'reverse_segment': lambda solution, step: self.reverse_segment_delta(solution, step, segment_length),
+        }
+        else:
+            neighbors_func_map = {
+                'swap_neighbors': self.swap_neighbors,
+                'insert_neighbors': self.insert_neighbors,
+                'reverse_segment': lambda solution: self.reverse_segment(solution, segment_length),
+            }
+
+        step_func_map = {
+            'best_improvement': self.best_improvement,
+            'first_improvement': self.first_improvement,
+            'random': self.random_step
+        }
+
+        init_solution_map = {
+            "topological_sort": self.topological_sort,
+            "deterministic_construction_heuristic": self.deterministic_construction_heuristic,
+            "random_construction_with_rcl": self.random_construction_with_rcl,
+            "random_construction_heuristic": self.random_construction_heuristic
+        }
+
+        neighbors_funcs = [neighbors_func_map[i] for i in neighborhood_functions]
+        step_func = step_func_map[step_function]
+
+        init_solution = init_solution_map[init_solution_func]()
+        best_solution = init_solution
+        f1 = self.calculate_objective(init_solution)
+
+        f_new = f1
+        f_old = f1+1
+        i = 0
+        new_solution = list()
+
+        while(f_new < f_old and i < max_neigborhood_swaps):
+            f_old = f_new
+            for neigborhood_func in neighbors_funcs:
+                i += 1
+                print("running local search for: ", neigborhood_func)
+                if not use_delta:
+                    my_local_search = self.local_search
+                    new_solution = my_local_search(best_solution, neigborhood_func, step_func, max_iterations=max_iterations_per_neighborhood)
+                    f_new = self.calculate_objective(new_solution)
+                else:
+                    my_local_search = self.local_search_delta
+                    new_solution = my_local_search(best_solution, neigborhood_func, step_function, max_iterations=max_iterations_per_neighborhood)
+                    f_new = self.calculate_objective(new_solution)
+                if f_new < f_old:
+                    print("found better solution with: ", neigborhood_func)
+                    print("sol value:", f_new, "\n")
+                    best_solution = new_solution.copy()
+                    break
+            else:
+                break #if for loop did not hit break: no improvement from any step function
+
+        end_time = time.time()
+        
+        print("\nVND completed.")
+        print(f"Total runtime: {end_time - start_time} seconds")
+
+        #print("initial solution:", init_solution)
+        print("initial objective:", f1, "\n")
+        
+        f_best = self.calculate_objective(best_solution)
+        #print("best solution:", best_solution)
+        
+        print("best objective:", f_best, "\n##########################################\n\n")
+
+        return
+
+    def solve_simulated_annealing(self, init_solution_func="topological_sort", neighbors_func='swap_neighbors',
+                                    initial_temperature=1000, cooling_rate=0.90, stopping_temperature=0.01,
+                                    max_iterations=1000, segment_length=5, use_delta=False):
+        """
+        Simulated Annealing optimization.
+
+        Parameters:
+        - init_solution_func: Method to generate the initial solution.
+        - neighbors_func: Neighborhood function to generate neighbors.
+        - initial_temperature: Starting temperature for SA.
+        - cooling_rate: Factor by which the temperature is multiplied each iteration.
+        - stopping_temperature: Temperature at which SA stops.
+        - max_iterations: Maximum number of iterations at each temperature.
+        - segment_length: Segment length for neighborhood functions that require it.
+        """
+        print("SA starting")
+
+        neighbors_func_map = set()
+        if not use_delta:
+            neighbors_func_map = {
+                'swap_neighbors': self.swap_neighbors,
+                'insert_neighbors': self.insert_neighbors,
+                'reverse_segment': lambda solution: self.reverse_segment(solution, segment_length),
+            }
+        else:
+            neighbors_func_map = {
+                'swap_neighbors': self.swap_neighbors_delta,
+                'insert_neighbors': self.insert_neighbors_delta,
+                'reverse_segment': lambda solution: self.reverse_segment_delta(solution, segment_length),
+            }
+
+        init_solution_map = {
+            "topological_sort": self.topological_sort,
+            "deterministic_construction_heuristic": self.deterministic_construction_heuristic,
+            "random_construction_with_rcl": self.random_construction_with_rcl,
+            "random_construction_heuristic": self.random_construction_heuristic
+        }
+
+        current_solution = init_solution_map[init_solution_func]()
+        current_objective = self.calculate_objective(current_solution)
+        best_solution = current_solution[:]
+        best_objective = current_objective
+
+        temperature = initial_temperature
+
+        iteration = 0
+
+        start_time = time.time()
+
+        while temperature > stopping_temperature:
+            for _ in range(max_iterations):
+                delta = None
+                neighbor = None
+                neighbor_objective = None
+                if not use_delta:
+                    neighbors = neighbors_func_map[neighbors_func](current_solution)
+                    neighbor = random.choice(neighbors)
+                else:
+                    neighbor, delta = neighbors_func_map[neighbors_func](current_solution, step="random")
+                #if not neighbors:
+                    #continue  
+                if not self.is_feasible(neighbor):
+                    continue 
+                
+                if not delta:
+                    neighbor_objective = self.calculate_objective(neighbor)
+                    delta = neighbor_objective - current_objective
+
+                if delta < 0 or random.random() < math.exp(-delta / temperature):
+                    current_solution = neighbor
+                    current_objective = current_objective + delta
+
+                    if current_objective < best_objective:
+                        best_solution = current_solution[:]
+                        best_objective = current_objective
+
+            temperature *= cooling_rate
+            iteration += 1
+            print(f"Iteration {iteration}, Temperature: {temperature:.5f}, Best Objective: {best_objective}")
+
+        end_time = time.time()
+        print("\nSimulated Annealing completed.")
+        print(f"Total runtime: {end_time - start_time} seconds")
+        #print(f"Best solution found: {best_solution}")
+        print(f"Best objective value: {best_objective}")
+        
     def testing(self):
         self.solution = self.topological_sort()
         # self.solution = self.deterministic_construction_heuristic()
@@ -738,4 +913,5 @@ if __name__ == "__main__":
     print("Function timing breakdown (sorted by percentage of total time):")
     for func_name, func_time, func_percentage in function_data:
         print(f"{func_name}: {func_time:.6f} seconds ({func_percentage:.2f}%)")
+
 
