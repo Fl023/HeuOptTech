@@ -10,6 +10,7 @@ class MWCCPPlotter:
     def __init__(self, instance_file, seed=None):
         self.solver = MWCCPSolver(instance_file, seed=seed)
 
+
     def run_solver(self, algorithm="VND_delta", num_runs=10, step_function='best_improvement',
                    neighbors_function='swap_neighbors',segment_length=None, alpha=0.5,
                    max_grasp_iterations=100, max_ls_iterations=100, max_vnd_iterations = 1000, max_vnd_swaps = 100, max_sa_iterations = 20,
@@ -133,6 +134,28 @@ class MWCCPPlotter:
 
             plt.savefig(filename, format='png', dpi=300)
 
+    def plot_obj_over_time_old(self, results):
+        timelines = results["timelines"]
+        timeline = timelines[0]
+        its = []
+        objs = []
+        runtimes = []
+        for e in timeline:
+            its.append(e[0])
+            objs.append(e[2])
+            runtimes.append(e[3]-timeline[0][3])
+        plt.subplot(2, 1, 1)
+        plt.plot(its, objs)
+        plt.title("Objective Over Iterations")
+        plt.xlabel("Iterations")
+        plt.ylabel("Objective Value")
+
+        plt.subplot(2, 1, 2)
+        plt.plot(runtimes, objs)
+        plt.title("Objective Over Time")
+        plt.xlabel("runtime")
+        plt.ylabel("Objective Value")
+        plt.show()
 
 
 
