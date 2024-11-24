@@ -11,7 +11,8 @@ class MWCCPSolver:
         """
         reading the instance file and initializing
         """
-        self.num_u, self.num_v, self.constraints, self.constraints_list, self.edges, self.edge_list = self.read_instance(filename)
+        self.num_u, self.num_v, self.constraints, self.constraints_list, self.edges, self.edge_list = self.read_instance(
+            filename)
         self.permutation = [i for i in range(self.num_u + 1, self.num_u + self.num_v + 1)]
         self.solution = None
         self.best_solution = None
@@ -50,7 +51,7 @@ class MWCCPSolver:
 
         return num_u, num_v, constraints, constraints_list, edges, edge_list
 
-    def calculate_objective(self, permutation):    # FASTER!
+    def calculate_objective(self, permutation):  # FASTER!
 
         # Create a mapping of node positions based on the permutation
         pos = {node: i for i, node in enumerate(permutation)}
@@ -66,7 +67,7 @@ class MWCCPSolver:
 
         return total_crossings
 
-    def calculate_partial_objective(self, permutation):    # FASTER!
+    def calculate_partial_objective(self, permutation):  # FASTER!
 
         # Create a mapping of node positions based on the permutation
         pos = {node: i for i, node in enumerate(permutation)}
@@ -178,7 +179,7 @@ class MWCCPSolver:
                     neighbor.insert(j, node)
                     if self.is_feasible(neighbor):
                         neighbors.append(neighbor)
-                        indices.append((i,j))
+                        indices.append((i, j))
                         if i < j:
                             subsolution = solution[i:j + 1]
                             subneighbor = neighbor[i:j + 1]
@@ -223,8 +224,8 @@ class MWCCPSolver:
         n = self.num_v
 
         for i in range(n):
-            end = i+segment_length
-            if end < n+1:
+            end = i + segment_length
+            if end < n + 1:
                 for j in range(i + 1, end):
                     neighbor = solution[:]
                     neighbor[i:j + 1] = reversed(neighbor[i:j + 1])
@@ -243,8 +244,8 @@ class MWCCPSolver:
         n = self.num_v
 
         for i in range(n):
-            end = i+segment_length
-            if end < n+1:
+            end = i + segment_length
+            if end < n + 1:
                 for j in range(i + 1, end):
                     neighbor = solution[:]
                     neighbor[i:j + 1] = reversed(neighbor[i:j + 1])
@@ -344,7 +345,7 @@ class MWCCPSolver:
                 weighted_crossings.append((candidate, self.calculate_partial_objective(solution + [candidate])))
 
             # Sort candidates by weighted crossings (ascending)
-            weighted_crossings.sort(key=lambda x: x[1])     # sort not nessecary, just take min
+            weighted_crossings.sort(key=lambda x: x[1])  # sort not nessecary, just take min
 
             # Select the candidate with the least weighted crossings
             best_candidate = weighted_crossings[0][0]
@@ -580,7 +581,26 @@ class MWCCPSolver:
             solutions.append((i, best_solution, best_objective, time.time()))
         return solutions
 
-    def solve_local_search(self, step_function='best_improvement', neighbors_func='swap_neighbors', segment_length=None):
+    def grasp_delta(self, neighbors_func, step_function, alpha=0.2, max_iterations=100, max_ls_iterations=100):
+
+        best_solution = None
+        best_objective = float('inf')
+        i = 0
+        solutions = [(i, best_solution, best_objective, time.time())]
+        for iteration in range(max_iterations):
+            x = self.random_construction_with_rcl(alpha=alpha)
+            sol = self.local_search_delta(x, neighbors_func, step_function, max_iterations=max_ls_iterations)
+            x_prime = sol[-1][1]
+            objective_value = sol[-1][2]
+            if objective_value < best_objective:
+                best_solution = x_prime
+                best_objective = objective_value
+            i += 1
+            solutions.append((i, best_solution, best_objective, time.time()))
+        return solutions
+
+    def solve_local_search(self, step_function='best_improvement', neighbors_func='swap_neighbors',
+                           segment_length=None):
 
         init_solution = self.topological_sort()
         # init_solution = self.deterministic_construction_heuristic()
@@ -620,14 +640,15 @@ class MWCCPSolver:
         print("Best objective value:", f_best)
         return solutions
 
-    def solve_local_search_delta(self, step_function='best_improvement', neighbors_func='swap_neighbors', segment_length=None):
+    def solve_local_search_delta(self, step_function='best_improvement', neighbors_func='swap_neighbors',
+                                 segment_length=None):
 
         init_solution = self.topological_sort()
         # init_solution = self.deterministic_construction_heuristic()
         print("step function:", step_function)
         print("neighborhood:", neighbors_func)
         print("segment length:", segment_length)
-        #print("Initial solution:", init_solution)
+        # print("Initial solution:", init_solution)
 
         neighbors_func_map = {
             'swap_neighbors': self.swap_neighbors_delta,
@@ -691,9 +712,10 @@ class MWCCPSolver:
         print("Best objective value:", f_best)
         return solutions
 
-    def solve_VND(self, neighborhood_functions = ["swap_neighbors", "reverse_segment"], init_solution_func = "topological_sort", 
-                  step_function_string='best_improvement', segment_length = 5, max_neigborhood_swaps = 100, 
-                  max_iterations_per_neighborhood = 5000, use_delta = False, init_solution = None):
+    def solve_VND(self, neighborhood_functions=["swap_neighbors", "reverse_segment"],
+                  init_solution_func="topological_sort",
+                  step_function_string='best_improvement', segment_length=5, max_neigborhood_swaps=100,
+                  max_iterations_per_neighborhood=5000, use_delta=False, init_solution=None):
         print("neighborhood functions:", neighborhood_functions)
         print("init solution_function:", init_solution_func)
         print("step function:", step_function_string)
@@ -707,10 +729,10 @@ class MWCCPSolver:
 
         if use_delta:
             neighbors_func_map = {
-            'swap_neighbors': self.swap_neighbors_delta,
-            'insert_neighbors': self.insert_neighbors_delta,
-            'reverse_segment': lambda solution, step: self.reverse_segment_delta(solution, step, segment_length),
-        }
+                'swap_neighbors': self.swap_neighbors_delta,
+                'insert_neighbors': self.insert_neighbors_delta,
+                'reverse_segment': lambda solution, step: self.reverse_segment_delta(solution, step, segment_length),
+            }
         else:
             neighbors_func_map = {
                 'swap_neighbors': self.swap_neighbors,
@@ -740,27 +762,30 @@ class MWCCPSolver:
         f1 = self.calculate_objective(init_solution)
 
         f_new = f1
-        f_old = f1+1
+        f_old = f1 + 1
         i = 0
         new_solution = list()
         output = list()
 
-        while(f_new < f_old and i < max_neigborhood_swaps):
+        while (f_new < f_old and i < max_neigborhood_swaps):
             f_old = f_new
             for neigborhood_func in neighbors_funcs:
                 i += 1
                 if not use_delta:
                     my_local_search = self.local_search
-                    solutions = my_local_search(best_solution, neigborhood_func, step_func, max_iterations=max_iterations_per_neighborhood)
+                    solutions = my_local_search(best_solution, neigborhood_func, step_func,
+                                                max_iterations=max_iterations_per_neighborhood)
                     new_solution = solutions[-1][1]
                     f_new = solutions[-1][2]
                     output += solutions
-                    #solutions.append((i, current_solution, f, time.time()))
+                    # solutions.append((i, current_solution, f, time.time()))
                 else:
                     my_local_search = self.local_search_delta
-                    solutions = self.local_search_delta(best_solution, neigborhood_func, #delta needs string not actual function -.-
-                                                        step_function_string, max_iterations=max_iterations_per_neighborhood)
-                    #solutions = my_local_search(best_solution, neigborhood_func, step_func, max_iterations=max_iterations_per_neighborhood)
+                    solutions = self.local_search_delta(best_solution, neigborhood_func,
+                                                        # delta needs string not actual function -.-
+                                                        step_function_string,
+                                                        max_iterations=max_iterations_per_neighborhood)
+                    # solutions = my_local_search(best_solution, neigborhood_func, step_func, max_iterations=max_iterations_per_neighborhood)
                     new_solution = solutions[-1][1]
                     f_new = solutions[-1][2]
                     output += solutions
@@ -771,26 +796,26 @@ class MWCCPSolver:
                     best_solution = new_solution.copy()
                     break
             else:
-                break #if for loop did not hit break: no improvement from any step function
+                break  # if for loop did not hit break: no improvement from any step function
 
         end_time = time.time()
-        
+
         print("\nVND completed.")
         print(f"Total runtime: {end_time - start_time} seconds")
 
-        #print("initial solution:", init_solution)
+        # print("initial solution:", init_solution)
         print("initial objective:", f1, "\n")
-        
+
         f_best = self.calculate_objective(best_solution)
-        #print("best solution:", best_solution)
-        
+        # print("best solution:", best_solution)
+
         print("best objective:", f_best, "\n##########################################\n\n")
 
         return output
 
     def solve_simulated_annealing(self, init_solution_func="topological_sort", neighbors_func='swap_neighbors',
-                                    initial_temperature=1000, cooling_rate=0.90, stopping_temperature=0.0001,
-                                    max_iterations=1000, segment_length=5, use_delta=False, init_solution = None):
+                                  initial_temperature=1000, cooling_rate=0.90, stopping_temperature=0.0001,
+                                  max_iterations=1000, segment_length=5, use_delta=False, init_solution=None):
         """
         Simulated Annealing optimization.
 
@@ -851,11 +876,11 @@ class MWCCPSolver:
                     neighbor = random.choice(neighbors)
                 else:
                     neighbor, delta = neighbors_func_map[neighbors_func](current_solution, step="random")
-                #if not neighbors:
-                    #continue  
+                # if not neighbors:
+                # continue
                 if not self.is_feasible(neighbor):
-                    continue 
-                
+                    continue
+
                 if not delta:
                     neighbor_objective = self.calculate_objective(neighbor)
                     delta = neighbor_objective - current_objective
@@ -870,18 +895,18 @@ class MWCCPSolver:
 
             temperature *= cooling_rate
             iteration += 1
-            print(f"Iteration {iteration}, Temperature: {temperature:.5f}, Best Objective: {best_objective}")#
+            print(f"Iteration {iteration}, Temperature: {temperature:.5f}, Best Objective: {best_objective}")  #
             output.append((iteration, best_solution, best_objective, time.time()))
-            #solutions.append((i, current_solution, f, time.time()))
+            # solutions.append((i, current_solution, f, time.time()))
 
         end_time = time.time()
         print("\nSimulated Annealing completed.")
         print(f"Total runtime: {end_time - start_time} seconds")
-        #print(f"Best solution found: {best_solution}")
+        # print(f"Best solution found: {best_solution}")
         print(f"Best objective value: {best_objective}")
 
         return output
-        
+
     def testing(self):
         self.solution = self.topological_sort()
         # self.solution = self.deterministic_construction_heuristic()
@@ -893,11 +918,7 @@ class MWCCPSolver:
 
         # print(self.solution, obj_val)
         print(sol, obj_val_sol)
-        print("runtime:", end_time-start_time)
-
-
-
-
+        print("runtime:", end_time - start_time)
 
 
 if __name__ == "__main__":
@@ -931,5 +952,4 @@ if __name__ == "__main__":
     print("Function timing breakdown (sorted by percentage of total time):")
     for func_name, func_time, func_percentage in function_data:
         print(f"{func_name}: {func_time:.6f} seconds ({func_percentage:.2f}%)")
-
 
