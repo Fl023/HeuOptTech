@@ -1,0 +1,11 @@
+    def run_solver(self, algorithm="VND_delta", num_runs=10, step_function='best_improvement',
+                   neighbors_function='swap_neighbors', segment_length=None, alpha=0.5,
+                   max_grasp_iterations=100, max_ls_iterations=100, max_vnd_iterations=1000, max_vnd_swaps=100,
+                   max_sa_iterations=20,
+                   sa_it=1000, sa_cr=0.95, sa_mt=1e-6):
+                   
+        elif algorithm == "VND_delta":
+            solver = lambda: self.solver.solve_VND(init_solution=init_solution, step_function_string=step_function, 
+                                                   # care, need strings
+                                                   max_neigborhood_swaps=max_vnd_swaps, segment_length=5,
+                                                   max_iterations_per_neighborhood=max_vnd_iterations, use_delta=True)

@@ -309,14 +309,12 @@ class MWCCPSolver:
         works like topological sort, but chooses node from list of nodes of in_degree=0,
         which leads to the smallest increase in total weight
         """
-        # Initialize
         solution = []  # Start with an empty solution
         in_degree = {node: 0 for node in self.permutation}
         graph = defaultdict(list)
-        # outgoing_weights = defaultdict(float)  # Store total outgoing weights for each node
+        # outgoing_weights = defaultdict(float) 
         outgoing_weights = dict.fromkeys(self.permutation, 0.0)
 
-        # Build the graph, in-degree, and outgoing weights based on constraints and edges
         for v, v_prime in self.constraints_list:
             graph[v].append(v_prime)
             in_degree[v_prime] += 1
@@ -326,7 +324,6 @@ class MWCCPSolver:
 
         # Initialize the candidate list with nodes that have zero in-degree
         candidate_list = [node for node in self.permutation if in_degree[node] == 0]
-        # Step 1: Select the first node based on total outgoing edge weight
         first_node = min(candidate_list, key=lambda x: outgoing_weights[x])
         solution.append(first_node)
         candidate_list.remove(first_node)
@@ -344,17 +341,13 @@ class MWCCPSolver:
             for candidate in candidate_list:
                 weighted_crossings.append((candidate, self.calculate_partial_objective(solution + [candidate])))
 
-            # Sort candidates by weighted crossings (ascending)
             weighted_crossings.sort(key=lambda x: x[1])  # sort not nessecary, just take min
 
-            # Select the candidate with the least weighted crossings
             best_candidate = weighted_crossings[0][0]
 
             # Add the selected node to the solution
-            solution.append(best_candidate)
             candidate_list.remove(best_candidate)
 
-            # Update in-degree and candidate list
             for neighbor in graph[best_candidate]:
                 in_degree[neighbor] -= 1
                 if in_degree[neighbor] == 0:
@@ -712,7 +705,7 @@ class MWCCPSolver:
         print("Best objective value:", f_best)
         return solutions
 
-    def solve_VND(self, neighborhood_functions=["swap_neighbors", "reverse_segment"],
+    def solve_VND(self, neighborhood_functions=["swap_neighbors", "reverse_segment", "insert_neighbors"],
                   init_solution_func="topological_sort",
                   step_function_string='best_improvement', segment_length=5, max_neigborhood_swaps=100,
                   max_iterations_per_neighborhood=5000, use_delta=False, init_solution=None):
@@ -815,7 +808,7 @@ class MWCCPSolver:
 
     def solve_simulated_annealing(self, init_solution_func="topological_sort", neighbors_func='swap_neighbors',
                                   initial_temperature=1000, cooling_rate=0.90, stopping_temperature=0.0001,
-                                  max_iterations=1000, segment_length=5, use_delta=False, init_solution=None):
+                                  max_iterations=1000, segment_length=5, use_delta=False, init_solution=None, max_time=50):
         """
         Simulated Annealing optimization.
 
@@ -897,6 +890,8 @@ class MWCCPSolver:
             iteration += 1
             print(f"Iteration {iteration}, Temperature: {temperature:.5f}, Best Objective: {best_objective}")  #
             output.append((iteration, best_solution, best_objective, time.time()))
+            if (time.time()-output[0][-1] > 50):
+                break
             # solutions.append((i, current_solution, f, time.time()))
 
         end_time = time.time()
@@ -920,8 +915,18 @@ class MWCCPSolver:
         print(sol, obj_val_sol)
         print("runtime:", end_time - start_time)
 
+def save_array_to_file(filename: str, array: list):
+    title = filename
+    with open(filename+".txt", 'w') as file:
+        file.write(f"{title}\n")  
+        file.write(" ".join(map(str, array)) + "\n") 
 
 if __name__ == "__main__":
+    solver = MWCCPSolver("competition_instances/inst_200_20_00001", seed=1)
+    solution = solver.deterministic_construction_heuristic()
+    save_array_to_file("inst_200_20_00001", solution)
+    exit()
+
     solver = MWCCPSolver("tuning_instances/small/inst_50_4_00010", seed=1)
     profiler = cProfile.Profile()
     profiler.enable()

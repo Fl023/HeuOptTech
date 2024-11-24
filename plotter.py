@@ -4,7 +4,8 @@ import matplotlib.pyplot as plt
 from statistics import mean, stdev
 from solver import MWCCPSolver
 import os
-
+import multiprocessing
+import concurrent.futures
 
 class MWCCPPlotter:
     def __init__(self, instance_file, seed=None):
@@ -13,8 +14,8 @@ class MWCCPPlotter:
     def run_solver(self, algorithm="VND_delta", num_runs=10, step_function='best_improvement',
                    neighbors_function='swap_neighbors', segment_length=None, alpha=0.5,
                    max_grasp_iterations=100, max_ls_iterations=100, max_vnd_iterations=1000, max_vnd_swaps=100,
-                   max_sa_iterations=20,
-                   sa_it=1000, sa_cr=0.95, sa_mt=1e-6):
+                   max_sa_iterations=70,
+                   sa_it=1000, sa_cr=0.99, sa_mt=1):
         runtimes = []
         final_objectives = []
         iteration_counts = []
@@ -72,7 +73,8 @@ class MWCCPPlotter:
                                                    max_iterations_per_neighborhood=max_vnd_iterations)
 
         elif algorithm == "VND_delta":
-            solver = lambda: self.solver.solve_VND(init_solution=init_solution, step_function_string=step_function,
+            solver = lambda: self.solver.solve_VND(init_solution=init_solution, step_function_string=step_function, 
+                                                   neighborhood_functions=["swap_neighbors", "reverse_segment"],
                                                    # care, need strings
                                                    max_neigborhood_swaps=max_vnd_swaps, segment_length=5,
                                                    max_iterations_per_neighborhood=max_vnd_iterations, use_delta=True)
@@ -283,15 +285,15 @@ class MWCCPPlotter:
         print("local search")
         local_search = self.run_solver(algorithm="local_search_delta", num_runs=num_runs,
                                        step_function="best_improvement", neighbors_function="reverse_segment",
-                                       segment_length=4, max_ls_iterations=50)
+                                       segment_length=4, max_ls_iterations=1000)
         print("GRASP")
         grasp = self.run_solver(algorithm="grasp_delta", num_runs=num_runs,
                                 step_function="best_improvement", neighbors_function="reverse_segment",
-                                segment_length=4, max_ls_iterations=50, max_grasp_iterations=20, alpha=0.5)
+                                segment_length=4, max_ls_iterations=1000, max_grasp_iterations=3, alpha=0.5)
         print("VND")
-        vnd = self.run_solver(algorithm="VND_delta")
+        vnd = self.run_solver(algorithm="VND_delta", num_runs=num_runs)
         print("SA")
-        sa = self.run_solver(algorithm="SA_delta")
+        sa = self.run_solver(algorithm="SA_delta", num_runs=num_runs)
 
         results = [local_search, grasp, vnd, sa]
         labels = ["local search", "GRASP", "VND", "SA"]
@@ -355,57 +357,99 @@ class MWCCPPlotter:
         plt.grid(True)
         plt.savefig("objectives_over_time_all.png", format='png', dpi=300)
 
+sa_it_arr = [1e2, 1e4, 1e6, 1e8]
+sa_cr_arr = [0.7, 0.9, 0.95, 0.99]
+max_sa_iterations_arr = [5, 20, 50, 100]
+
+def run_solver_with_max_sa_iterations(i):
+    return plotter.run_solver(
+        algorithm="SA_delta",
+        max_vnd_iterations=1000,
+        max_vnd_swaps=40,
+        num_runs=num_runs,
+        sa_it=sa_it,
+        sa_mt=sa_mt,
+        sa_cr=sa_cr,
+        max_sa_iterations=max_sa_iterations_arr[i]
+    )
+
+def run_solver_with_sa_it(i):
+    return plotter.run_solver(
+        algorithm="SA_delta",
+        max_vnd_iterations=1000,
+        max_vnd_swaps=40,
+        num_runs=num_runs,
+        sa_it=sa_it_arr[i],
+        sa_mt=sa_mt,
+        sa_cr=sa_cr,
+        max_sa_iterations=max_sa_iterations
+    )
+
+def run_solver_with_sa_cr(i):
+    return plotter.run_solver(
+        algorithm="SA_delta",
+        max_vnd_iterations=1000,
+        max_vnd_swaps=40,
+        num_runs=num_runs,
+        sa_it=sa_it,
+        sa_mt=sa_mt,
+        sa_cr=sa_cr_arr[i],
+        max_sa_iterations=max_sa_iterations
+    )
+
 if __name__ == "__main__":
 
-    instance_file = "tuning_instances/small/inst_50_4_00010"
+    instance_file = "test_instances/medium/inst_200_20_00001"
     plotter = MWCCPPlotter(instance_file, seed=42)
-    num_runs = 2
-    plotter.plot_localsearch(num_runs=num_runs)
-    plotter.plot_localsearch_delta_vs_not(num_runs=num_runs)
-    plotter.plot_all(num_runs=2)
-
+    num_runs = 10
+    plotter.plot_all(num_runs=num_runs)
+    #with concurrent.futures.ProcessPoolExecutor() as executor:
+        #future1 = executor.submit(plotter.plot_localsearch, num_runs=num_runs)
+        #future2 = executor.submit(plotter.plot_localsearch_delta_vs_not, num_runs=num_runs)
+        #future3 = executor.submit(plotter.plot_all, num_runs=num_runs)
+        
+        #concurrent.futures.wait([future1, future2, future3])
+    exit()
 
 
     directory = "tuning_instances/medium/"
     instance_files = [os.path.join(directory, f) for f in os.listdir(directory) if
                       os.path.isfile(os.path.join(directory, f))]
 
-    instance_file = "tuning_instances/medium/inst_200_20_00010"
+    instance_file = "tuning_instances/medium/inst_200_20_00001"
     plotter = MWCCPPlotter(instance_file, seed=42)
 
-    num_runs = 1
+    num_runs = 10
 
     results_arr = list()
     sa_it = 10000
-    sa_mt = 1e-1
+    sa_mt = 1e-7
     sa_cr = 0.95
-    max_sa_iterations = 1
+    max_sa_iterations = 40
 
-    sa_it_arr = [1e2, 1e4, 1e6, 1e8]
-    sa_cr_arr = [0.7, 0.9, 0.95, 0.99]
-    max_sa_iterations_arr = [1, 20, 50, 200]
+    with multiprocessing.Pool(processes=4) as pool:
+        results_arr = pool.map(run_solver_with_sa_it, range(4))
+        plotter.plot_obj_over_time(
+            results_arr,
+            filename="it.png",
+            titels=[str(i) for i in sa_it_arr],
+            suptitel="Objective function vs Execution Time for different Initial Temps"
+        )
 
-    for i in range(4):
-        results_arr.append(
-            plotter.run_solver(algorithm="SA_delta", max_vnd_iterations=1000, max_vnd_swaps=40, num_runs=num_runs,
-                               sa_it=sa_it, sa_mt=sa_mt, sa_cr=sa_cr, max_sa_iterations=max_sa_iterations_arr[i]))
-    plotter.plot_obj_over_time(results_arr, filename="iterations.png", titels=[str(i) for i in max_sa_iterations_arr],
-                               suptitel="Objective function vs Execution Time for different Iteration Counts")
+    with multiprocessing.Pool(processes=4) as pool:
+        results_arr = pool.map(run_solver_with_sa_cr, range(4))
+        plotter.plot_obj_over_time(
+            results_arr,
+            filename="cr.png",
+            titels=[str(i) for i in sa_cr_arr],
+            suptitel="Objective function vs Execution Time for different Cooling Rates"
+        )
 
-    results_arr = list()
-
-    for i in range(4):
-        results_arr.append(
-            plotter.run_solver(algorithm="SA_delta", max_vnd_iterations=1000, max_vnd_swaps=40, num_runs=num_runs,
-                               sa_it=sa_it_arr[i], sa_mt=sa_mt, sa_cr=sa_cr, max_sa_iterations=max_sa_iterations))
-    plotter.plot_obj_over_time(results_arr, filename="it.png", titels=[str(i) for i in sa_it_arr],
-                               suptitel="Objective function vs Execution Time for different Initial Temps")
-
-    results_arr = list()
-
-    for i in range(4):
-        results_arr.append(
-            plotter.run_solver(algorithm="SA_delta", max_vnd_iterations=1000, max_vnd_swaps=40, num_runs=num_runs,
-                               sa_it=sa_it, sa_mt=sa_mt, sa_cr=sa_cr_arr[i], max_sa_iterations=max_sa_iterations))
-    plotter.plot_obj_over_time(results_arr, filename="cr.png", titels=[str(i) for i in sa_cr_arr],
-                               suptitel="Objective function vs Execution Time for different Cooling Rates")
+    with multiprocessing.Pool(processes=4) as pool:
+        results_arr = pool.map(run_solver_with_max_sa_iterations, range(4))
+        plotter.plot_obj_over_time(
+            results_arr,
+            filename="iterations.png",
+            titels=[str(i) for i in max_sa_iterations_arr],
+            suptitel="Objective function vs Execution Time for different Iteration Counts"
+        )
