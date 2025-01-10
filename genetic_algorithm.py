@@ -1,28 +1,19 @@
-import random
+import os
+import pickle
 import numpy as np
 from collections import defaultdict
 import time
-
-
+np.float_ = np.float64
+np.complex_ = np.complex128
 
 class MWCCPGeneticAlgorithm:
-    def __init__(self, population_size, mutation_rate, max_generations, num_parents, frac_children,
-                 selection_pressure=2, num_elites = 1,
-                 filename="tuning_instances/small/inst_50_4_00010"):
+    def __init__(self, filename="tuning_instances/small/inst_50_4_00010", seed=0):
         self.profiling_times = defaultdict(float)  # To store profiling times
         self.num_u, self.num_v, self.constraints, self.edgesdic = self.read_instance(filename)
         self.nodes = np.arange(0, self.num_v, dtype=int)
-        self.population_size = population_size
-        self.mutation_rate = mutation_rate
-        self.max_generations = max_generations
-        self.population = np.empty((self.population_size, self.num_v), dtype=int)
-        self.fitness_scores = np.zeros(self.population_size)
-        self.crossing_vals = self.calc_cross_vals()
-        self.C_max = self.calculate_c_max()
-        self.num_parents = num_parents
-        self.S = selection_pressure
-        self.frac_children = frac_children
-        self.num_elites = num_elites
+        self.population_size = None
+        self.population = None
+        self.fitness_scores = None
         self.upper_tri_indices = np.triu_indices(self.num_v, k=1)
         self.best_solution = []
         self.best_fitness = 0
@@ -30,7 +21,21 @@ class MWCCPGeneticAlgorithm:
         self.not_fine = 0
         self.tot_m = 0
         self.not_fine_m = 0
-        np.random.seed(0)
+
+        # File paths for precomputed data
+        precomputed_data_dir = "precomputed_data"
+        os.makedirs(precomputed_data_dir, exist_ok=True)
+        instance_name = os.path.basename(filename)
+        self.precomputed_file = os.path.join(precomputed_data_dir, f"{instance_name}_data.pkl")
+
+        # Load or calculate cross_vals and C_max
+        self.crossing_vals = None
+        precomputed_data = self.get_precomputed_data()
+        self.crossing_vals = precomputed_data['cross_vals']
+        self.C_max = precomputed_data['c_max']
+
+        # print("seed:", seed)
+        np.random.seed(seed)
 
 
     def profile(func):
@@ -45,9 +50,8 @@ class MWCCPGeneticAlgorithm:
 
         return wrapper
 
-    @profile
     def read_instance(self, filename):
-        print("reading file ", filename, "...")
+        # print("reading file ", filename, "...")
         with open(filename, 'r') as file:
             lines = file.readlines()
 
@@ -74,7 +78,6 @@ class MWCCPGeneticAlgorithm:
 
         return num_u, num_v, constraints, edgesdicnumpy
 
-    @profile
     def calculate_c_max(self):
         return sum(
             max(self.crossing_vals[i][j], self.crossing_vals[j][i])
@@ -82,7 +85,6 @@ class MWCCPGeneticAlgorithm:
             for j in range(i + 1, self.num_v)
         )
 
-    @profile
     def calc_cross_vals(self):
         cross_vals = np.zeros((self.num_v, self.num_v))
         for i in self.nodes:
@@ -101,20 +103,34 @@ class MWCCPGeneticAlgorithm:
                 cross_vals[i][j] = total_crossings
         return cross_vals
 
-    @profile
     def calculate_objective(self, permutations):
         permuted_matrices = self.crossing_vals[permutations[:, :, None], permutations[:, None, :]]
         objectives = permuted_matrices[:, self.upper_tri_indices[0], self.upper_tri_indices[1]].sum(axis=1)
         return objectives
 
+    def get_precomputed_data(self):
+        """Load precomputed data or calculate and save it."""
+        if os.path.exists(self.precomputed_file):
+            # print(f"Loading precomputed data from {self.precomputed_file}")
+            with open(self.precomputed_file, 'rb') as f:
+                return pickle.load(f)
+        else:
+            # print(f"Precomputing data for instance.")
+            cross_vals = self.calc_cross_vals()
+            self.crossing_vals = cross_vals
+            c_max = self.calculate_c_max()
+            data = {'cross_vals': cross_vals, 'c_max': c_max}
+            with open(self.precomputed_file, 'wb') as f:
+                pickle.dump(data, f)
+            return data
+
     def fitness_function(self, permutation):
         return self.C_max - self.calculate_objective(permutation)
 
-    def linear_scaling(self):
+    def linear_scaling(self, S):
         g_max = np.max(self.fitness_scores)
         g_min = np.min(self.fitness_scores)
         g_avg = np.mean(self.fitness_scores)
-        S = self.S
 
         if g_max != g_avg:
             a = (S * g_avg - g_avg) / (g_max - g_avg)
@@ -128,7 +144,6 @@ class MWCCPGeneticAlgorithm:
 
         return np.maximum(a * self.fitness_scores - b, 0)
 
-    @profile
     def is_feasible(self, permutation):
         position = np.argsort(permutation)
         for v in self.constraints:
@@ -137,7 +152,6 @@ class MWCCPGeneticAlgorithm:
                     return False
         return True
 
-    @profile
     def initialize_population(self):
         self.population = np.array([np.random.permutation(self.nodes) for _ in range(self.population_size)])
         feasibility = np.array([self.is_feasible(i) for i in self.population])
@@ -146,30 +160,28 @@ class MWCCPGeneticAlgorithm:
 
         self.population[~feasibility] = np.array([self.repair(candidate) for candidate in self.population[~feasibility]])
 
-        print(f"{not_fine} / {self.population_size} candidates needed reparation")
+        # print(f"{not_fine} / {self.population_size} candidates needed reparation")
 
     def evaluate_population(self):
         self.fitness_scores = self.fitness_function(self.population)
 
-    @profile
-    def select_parents(self, num_parents, linear_scaling=True):
+    def select_parents(self, num_parents, linear_scaling=True, selection_pressure=None):
         scores = self.fitness_scores
         if linear_scaling:
-            scores = self.linear_scaling()
+            scores = self.linear_scaling(selection_pressure)
         probabilities = scores / scores.sum()
         parent_indices = np.random.choice(self.population_size, size=num_parents, replace=True, p=probabilities)
         return self.population[parent_indices]
 
-    @profile
-    def recombine(self, parents, fraction):
+    def recombine(self, parents, num_children):
         offspring = []
-        while len(offspring) < fraction*len(parents):
+        while len(offspring) < num_children:
             parent_indices = np.random.choice(len(parents), size=2, replace=False)
             parent1, parent2 = parents[parent_indices]
             child1, child2 = self.pmx(parent1, parent2)
             offspring.append(child1)
             offspring.append(child2)
-        if len(offspring) > fraction*len(parents):  # in case number of parents is odd
+        if len(offspring) > num_children:  # in case number of parents is odd
             offspring.pop()
         return offspring
 
@@ -194,7 +206,6 @@ class MWCCPGeneticAlgorithm:
         self.tot += 1
         return child
 
-    @profile
     def repair(self, chromosome):
         position = np.argsort(chromosome)
         repaired = True
@@ -209,11 +220,10 @@ class MWCCPGeneticAlgorithm:
                         repaired = True
         return chromosome
 
-    @profile
-    def mutate(self, chromosomes):
+    def mutate(self, chromosomes, mutation_rate):
         mutated_chroms = []
         for chromosome in chromosomes:
-            if np.random.rand(1)[0] < self.mutation_rate:
+            if np.random.rand(1)[0] < mutation_rate:
                 i, j = np.random.randint(0, self.num_v, size=2)
                 chromosome[[i, j]] = chromosome[[j, i]]
                 if not self.is_feasible(chromosome):
@@ -225,16 +235,14 @@ class MWCCPGeneticAlgorithm:
                 mutated_chroms.append(chromosome)
         return mutated_chroms
 
-    @profile
-    def replace_population(self, children, fraction, elite_count=1):
-        num_children = int(fraction * self.population_size)
+    def replace_population(self, children, elite_count=1):
         elite_indices = sorted(range(len(self.fitness_scores)), key=lambda i: self.fitness_scores[i], reverse=True)[
                         :elite_count]
         elites = self.population[elite_indices]
         elites_fitness = self.fitness_scores[elite_indices]
 
         permuted_children_indices = np.random.permutation(len(children))[
-                                    :min(num_children, len(children), self.population_size - elite_count)]
+                                    :min(len(children), self.population_size - elite_count)]
         selected_children = children[permuted_children_indices]
         children_fitness = self.fitness_function(selected_children)
 
@@ -247,10 +255,20 @@ class MWCCPGeneticAlgorithm:
         self.population = new_population
         self.fitness_scores = np.concatenate((children_fitness, selected_old_fitness, elites_fitness))
 
-    def run(self):
-        num_parents = self.num_parents
-        fraction_recomb = self.frac_children
-        fraction_replace = 1
+    def run(self, population_size=10, mutation_rate=1.0, max_generations=100, linear_scaling=True,
+            selection_pressure=2.0, frac_children=1.0, frac_elites=0.1):
+        self.population_size = population_size
+        self.population = np.empty((self.population_size, self.num_v), dtype=int)
+        self.fitness_scores = np.zeros(self.population_size)
+        num_children = int(frac_children*population_size)
+        num_parents = max(2,num_children)
+        num_elites = int(frac_elites*population_size)
+
+        self.best_fitness = 0
+        self.tot = 0
+        self.not_fine = 0
+        self.tot_m = 0
+        self.not_fine_m = 0
 
         self.initialize_population()
         self.evaluate_population()
@@ -259,11 +277,12 @@ class MWCCPGeneticAlgorithm:
             self.best_solution = self.population[best_idx]
             self.best_fitness = self.fitness_scores[best_idx]
         print(f"Generation {0}: Best Fitness = {self.best_fitness}")
-        for generation in range(self.max_generations):
-            parents = self.select_parents(num_parents, linear_scaling=True)
-            children = self.recombine(parents, fraction_recomb)
-            children = self.mutate(children)
-            self.replace_population(np.array(children), fraction_replace, elite_count=self.num_elites)
+        for generation in range(max_generations):
+            parents = self.select_parents(num_parents, linear_scaling=linear_scaling,
+                                          selection_pressure=selection_pressure)
+            children = self.recombine(parents, num_children)
+            children = self.mutate(children, mutation_rate)
+            self.replace_population(np.array(children), elite_count=num_elites)
             # self.evaluate_population()
 
             best_idx = np.argmin(self.fitness_scores)
@@ -273,30 +292,29 @@ class MWCCPGeneticAlgorithm:
             print(f"Generation {generation+1}: Best Fitness = {self.best_fitness}, Objective = {self.C_max - self.best_fitness}")
 
 
-        print("For PMX", self.not_fine, "/", self.tot, "chromosomes needed reparation.")
-        print("For mutation", self.not_fine_m, "/", self.tot_m, "chromosomes needed reparation.")
-        print("\nProfiling times (in seconds):")
-        for func, runtime in self.profiling_times.items():
-            print(f"{func}: {runtime:.6f} s")
+        # print("For PMX", self.not_fine, "/", self.tot, "chromosomes needed reparation.")
+        # print("For mutation", self.not_fine_m, "/", self.tot_m, "chromosomes needed reparation.")
+        # print("\nProfiling times (in seconds):")
+        # for func, runtime in self.profiling_times.items():
+        #     print(f"{func}: {runtime:.6f} s")
         return self.best_solution + 1 + self.num_u, self.best_fitness, self.C_max - self.best_fitness
+
 
 if __name__ == "__main__":
     start = time.time()
-    ga = MWCCPGeneticAlgorithm(
-        population_size=10,
-        mutation_rate=1.0,
-        max_generations=100,
-        num_parents=5,
-        selection_pressure=2,
-        frac_children=1,
-        num_elites=3,
-        filename="tuning_instances/large/inst_1000_60_00005"
-    )
-
-    best_solution, best_fitness, best_objective = ga.run()
+    ga = MWCCPGeneticAlgorithm(filename="tuning_instances/small/inst_50_4_00010")
     end = time.time()
-    print()
-    print("Best Solution:", best_solution)
-    print("Best Fitness:", best_fitness)
-    print("Best Objective:", best_objective)
-    print("Runtime:", end-start, "s")
+    print("Initialization runtime:", end - start, "s")
+    num_runs = 1
+
+    for i in range(num_runs):
+        print("\nRun", i+1)
+        start = time.time()
+        res = ga.run(population_size=13, mutation_rate=1.0, max_generations=1000, linear_scaling=True,
+                     selection_pressure=2, frac_children=0.46477, frac_elites=0.095553)
+        best_solution, best_fitness, best_objective = res
+        end = time.time()
+        print()
+        print("Best Solution:", best_solution)
+        print("Best Fitness:", best_fitness)
+        print("Best Objective:", best_objective)
