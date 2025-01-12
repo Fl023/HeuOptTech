@@ -7,7 +7,7 @@ import csv
 
 
 statistics = {}
-instance_size = "medium"
+instance_size = "medium_large"
 instance_folder = "test_instances/" + instance_size
 max_generations=2000
 num_runs = 10
@@ -58,8 +58,8 @@ for key in statistics.keys():
     runtime += statistics[key]["avg_times"][-1]
     objs += statistics[key]["mean_objs"]/statistics[key]["mean_objs"][0]
 
-timepoints = np.linspace(0, runtime/num_runs, max_generations+1)
-objs /= num_runs
+timepoints = np.linspace(0, runtime/len(instances), max_generations+1)
+objs /= len(instances)
 
 plt.plot(timepoints, objs)
 plt.xlabel("time in s")
