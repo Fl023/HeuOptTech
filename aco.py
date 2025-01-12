@@ -40,7 +40,7 @@ def read_instance(filename):
     'constraints[a]' = set of b => a < b.
     'edgesdic[v]' = list of (top_node, weight) for crossing calc.
     """
-    print(f"[INFO] Reading instance: {filename}")
+    #print(f"[INFO] Reading instance: {filename}")
     with open(filename, 'r') as f:
         lines = f.readlines()
 
@@ -120,6 +120,9 @@ def build_crossing_vals(num_v, edgesdic):
     """
     crossing_vals[i][j] = cost if node i is placed immediately before node j.
     """
+    cost_count = 0
+    cost_sum = 0
+
     nodes = np.arange(0, num_v, dtype=int)
     cross_vals = np.zeros((num_v, num_v))
     for i in nodes:
@@ -136,7 +139,12 @@ def build_crossing_vals(num_v, edgesdic):
             u1, w1 = edges[:, 0], edges[:, 1]
             total_crossings = np.sum((w1[:, None] + w2) * (u1[:, None] < u2))
             cross_vals[i][j] = total_crossings
-    return cross_vals
+
+            cost_sum += total_crossings
+            cost_count += 1
+
+    average_cost = cost_sum/cost_count
+    return cross_vals, average_cost
 
 @profile
 def is_feasible(perm, constraints):
@@ -185,7 +193,7 @@ def build_static_feasible_lists(num_v, constraints):
     
 
 @profile
-def build_ant_solution(num_v, not_feasible_before, crossing_vals, pheromone, alpha=1.0, beta=1.0):
+def build_ant_solution(num_v, not_feasible_before, crossing_vals, pheromone, pheromone_start, average_cost, alpha=1.0, beta=1.0):
     """
     Builds a single feasible permutation using discrete step-by-step ACO logic,
     reading precomputed adjacency 'feasible_after[i]' that lists which nodes 
@@ -215,7 +223,7 @@ def build_ant_solution(num_v, not_feasible_before, crossing_vals, pheromone, alp
 
         # 2) Pheromone row
         if current_node == -1:
-            row = np.ones(num_v, dtype=float)
+            row = pheromone_start
         else:
             row = pheromone[current_node, :]
 
@@ -224,7 +232,7 @@ def build_ant_solution(num_v, not_feasible_before, crossing_vals, pheromone, alp
             heuristic = np.ones(num_v, dtype=float)
         else:
             cval = crossing_vals[current_node, :]
-            heuristic = 1.0 / (1.0 + cval)
+            heuristic = 3*average_cost / (1.0 + cval)
 
         # 4) Build scores
         scores = []
@@ -271,26 +279,28 @@ def ant_colony_opt(
     filename, 
     num_ants=10, 
     alpha=1.0, 
-    beta=2.0, 
+    beta=1.0, 
     rho=0.1, 
     Q=1.0, 
-    max_iter=30, 
+    max_time_sec=10, 
     seed=0
 ):
     """
-    Main ACO driver:
+    Main ACO driver (time-based stopping):
       - read instance
       - propagate constraints
       - compute_predecessors => for each node, which must be left of it
       - build crossing_vals
       - init pheromone => all ones
-      - each iteration:
+      - while time budget not exceeded:
          * ants build solutions
          * pick best local
          * evaporate
          * deposit pheromone
-      - keep global best
+      - keep global best until time runs out
     """
+    import time
+
     np.random.seed(seed)
     local_bests = []
 
@@ -298,75 +308,100 @@ def ant_colony_opt(
     num_u, num_v, constraints_dict, edgesdic = read_instance(filename)
     # 2) propagate
     constraints = propagate_constraints(constraints_dict, num_v)
-    # 3) compute predecessors once
+    # 3) compute predecessors
     predecessors = compute_predecessors(constraints, num_v)
     # 4) crossing
-    crossing_vals = build_crossing_vals(num_v, edgesdic)
+    crossing_vals, average_cost = build_crossing_vals(num_v, edgesdic)
     # 5) init pheromone
     pheromone = np.ones((num_v, num_v), dtype=float)
+    pheromone_start = np.ones(num_v, dtype=float)
 
     best_perm = None
     best_cost = float('inf')
 
     not_feasible_before = build_static_feasible_lists(num_v, constraints)
 
-    for iteration in range(1, max_iter+1):
+    # Track start time
+    start_time = time.time()
+    iteration = 0
+
+    while True:
+        iteration += 1
         all_solutions = []
         all_costs = []
 
-        # build ants
+        # Build ants
         for _ in range(num_ants):
-            sol = build_ant_solution(num_v, not_feasible_before, crossing_vals, pheromone, alpha, beta)
+            sol = build_ant_solution(
+                num_v,
+                not_feasible_before,
+                crossing_vals,
+                pheromone,
+                pheromone_start,
+                average_cost,
+                alpha,
+                beta
+            )
             if sol is None:
                 continue
+
             cost = consecutive_cost(sol, crossing_vals)
             all_solutions.append(sol)
+
             if not is_feasible(sol, constraints):
                 print("THIS CANNOT HAPPEN #######################################")
                 print(sol)
             all_costs.append(cost)
 
-        # if no feasible solutions
+        # If no feasible solutions
         if not all_solutions:
             pheromone *= (1.0 - rho)
             print(f"Iter={iteration}, no feasible solutions.")
-            continue
+        else:
+            # Local best
+            idx_best = np.argmin(all_costs)
+            local_best_sol = all_solutions[idx_best]
+            local_best_cost = all_costs[idx_best]
 
-        # local best
-        idx_best = np.argmin(all_costs)
-        local_best_sol = all_solutions[idx_best]
-        local_best_cost = all_costs[idx_best]
+            # Update global best
+            if local_best_cost < best_cost:
+                best_cost = local_best_cost
+                best_perm = local_best_sol
 
-        if local_best_cost < best_cost:
-            best_cost = local_best_cost
-            best_perm = local_best_sol
+            # Evaporate
+            pheromone *= (1.0 - rho)
+            pheromone_start *= (1.0 - rho)
 
-        # evaporate
-        pheromone *= (1.0 - rho)
-        avg_cost = sum(all_costs)/len(all_costs)
+            # Deposit
+            for sol, cost in zip(all_solutions, all_costs):
+                deposit = Q * best_cost / (1.0 + cost)
+                pheromone_start[sol[0]] += deposit
+                for i in range(len(sol) - 1):
+                    a = sol[i]
+                    b = sol[i+1]
+                    pheromone[a, b] += deposit
 
-        # deposit
-        for sol, cost in zip(all_solutions, all_costs):
-            deposit = Q * avg_cost / (1.0 + cost)
-            for i in range(len(sol) - 1):
-                a = sol[i]
-                b = sol[i+1]
-                pheromone[a, b] += deposit
+            #print(f"Iter={iteration}, local best={local_best_cost:.4f}, global best={best_cost:.4f}")
+            local_bests.append(local_best_cost)
 
-        print(f"Iter={iteration}, local best={local_best_cost:.4f}, global best={best_cost:.4f}")
-        local_bests.append(local_best_cost)
-        #print(pheromone[10])
+        # Check time budget
+        elapsed = time.time() - start_time
+        if elapsed >= max_time_sec:
+            print(f"\n[INFO] Time limit of {max_time_sec}s reached. Stopping.")
+            break
 
-
-    if best_perm is None:
-        print("[RESULT] No feasible solution found at all.")
+    if __name__ == "__main__":
+        if best_perm is None:
+            print("[RESULT] No feasible solution found at all.")
+        else:
+            print("[RESULT] Best cost=", best_cost)
+            print("Permutation:", " ".join([str(i) for i in best_perm]))
+            feasible_ok = is_feasible(best_perm, constraints)
+            print("Feasible check:", feasible_ok)
+        return local_bests
     else:
-        print("[RESULT] Best cost=", best_cost)
-        print("Permutation:", " ".join([str(i) for i in best_perm]))
-        feasible_ok = is_feasible(best_perm, constraints)
-        print("Feasible check:", feasible_ok)
+        return best_cost
 
-    return local_bests
 
 
 ##############################################################################
@@ -391,28 +426,30 @@ def print_profile_summary():
 
 
 if __name__ == "__main__":
-    FILE_NAME = "very_large_comp_instances/inst_1500_120_00003"  # Adjust if needed
+    FILE_NAME = "tuning_instances/medium/inst_200_20_00001"  # Adjust if needed
 
+    max_time = 10
     local_bests = ant_colony_opt(
         filename=FILE_NAME,
         num_ants=20,
         alpha=1.0,
-        beta=5.0,
+        beta=1.0,
         rho=0.1,
-        Q=10.0,
-        max_iter=20,
+        Q=0.5,
+        max_time_sec=max_time,
         seed=0
     )
 
     # Print the profiling summary
     print_profile_summary()
 
+    from math import log
     plt.figure(figsize=(8, 6))  # Set the figure size
-    plt.plot(local_bests, 'o', markersize=8)  # 'o' specifies a point graph
+    plt.plot(local_bests, 'o', markersize=6/log(max_time))  # 'o' specifies a point graph
     plt.title("Point Graph of Floats")
     plt.xlabel("Index")
     plt.ylabel("Value")
     plt.grid(True)  # Add grid for better visualization
 
-    # Save the plot as a PNG file
+    # Save the plot as a PNG fileMWCCPGeneticAlgorithm
     plt.savefig("point_graph.png")
